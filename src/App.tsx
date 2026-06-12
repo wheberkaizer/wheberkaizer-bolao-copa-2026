@@ -4,7 +4,6 @@ import { Team, Match, Bet, Participant } from './types';
 import {
   generateGroupMatches,
   generateKnockoutMatches,
-  MOCK_PARTICIPANTS_NAMES,
   calculateBetScore,
 } from './data/worldCupData';
 
@@ -99,74 +98,67 @@ export default function App() {
     }
     setCurrentUserBets(loadedUserBets);
 
-    // 4. Load Participants & their uniform random bets
+    // 4. Load Participants & ensure they are loaded without mock data
     const storedParticipants = localStorage.getItem('bolao_2026_participants');
+    let loadedParticipants: Participant[] = [];
     if (storedParticipants && !needsMigration) {
       try {
-        setParticipants(JSON.parse(storedParticipants));
+        const parsed = JSON.parse(storedParticipants);
+        // Filter out any mock participants
+        loadedParticipants = parsed.filter((p: any) => !p.id.startsWith('mock_p_') && p.id !== 'current_user');
       } catch (e) {
-        initParticipants(savedUser || 'Competidor Solitário', loadedMatches, loadedUserBets);
+        loadedParticipants = [];
       }
-    } else {
-      initParticipants(savedUser || 'Novo Campo', loadedMatches, loadedUserBets);
     }
+
+    // If there is a savedUser, make sure they exist in the loadedParticipants list
+    if (savedUser) {
+      const exists = loadedParticipants.some(p => p.name.toLowerCase().trim() === savedUser.toLowerCase().trim());
+      if (!exists) {
+        loadedParticipants.push({
+          id: `user_${Date.now()}`,
+          name: savedUser,
+          isCurrentUser: true,
+          bets: loadedUserBets,
+          score: 0
+        });
+      } else {
+        // Ensure they are flagged as currentUser
+        loadedParticipants = loadedParticipants.map(p => {
+          if (p.name.toLowerCase().trim() === savedUser.toLowerCase().trim()) {
+            return { ...p, isCurrentUser: true, bets: loadedUserBets };
+          }
+          return { ...p, isCurrentUser: false };
+        });
+      }
+    }
+
+    setParticipants(loadedParticipants);
+    localStorage.setItem('bolao_2026_participants', JSON.stringify(loadedParticipants));
+    recalculateAllScores(loadedParticipants, loadedMatches);
   }, []);
 
-  // Initialization helper to create simulated contenders with fixed guesses so the ranking calculation behaves with total realism
+  // Initialization helper to create participants list starting with only actual logged-in users (starts fully empty if no user)
   const initParticipants = (
-    currentName: string,
+    currentName: string | null,
     allMatches: Match[],
     userBets: { [matchId: string]: Bet }
   ) => {
     const list: Participant[] = [];
 
-    // Current user participant item
-    const userPart: Participant = {
-      id: 'current_user',
-      name: currentName,
-      isCurrentUser: true,
-      bets: userBets,
-      score: 0,
-    };
-    list.push(userPart);
-
-    // Generate 10 competitors
-    MOCK_PARTICIPANTS_NAMES.forEach((name, idx) => {
-      const pBets: { [matchId: string]: Bet } = {};
-      
-      allMatches.forEach((m) => {
-        // Generate a logical, realistic random guess for the bot (more likely to be low scoring results like 2-1 or 1-1)
-        const randSeed = Math.random();
-        let scoreA = 1;
-        let scoreB = 1;
-
-        if (randSeed < 0.25) {
-          scoreA = 2; scoreB = 1;
-        } else if (randSeed < 0.45) {
-          scoreA = 1; scoreB = 0;
-        } else if (randSeed < 0.60) {
-          scoreA = 0; scoreB = 1;
-        } else if (randSeed < 0.75) {
-          scoreA = 1; scoreB = 2;
-        } else if (randSeed < 0.90) {
-          scoreA = 2; scoreB = 2;
-        } else {
-          scoreA = 0; scoreB = 0;
-        }
-
-        pBets[m.id] = { matchId: m.id, scoreA, scoreB };
-      });
-
-      list.push({
-        id: `mock_p_${idx}`,
-        name,
-        isCurrentUser: false,
-        bets: pBets,
+    if (currentName) {
+      const userPart: Participant = {
+        id: `user_${Date.now()}`,
+        name: currentName,
+        isCurrentUser: true,
+        bets: userBets,
         score: 0,
-      });
-    });
+      };
+      list.push(userPart);
+    }
 
-    // Compute their initial scores
+    setParticipants(list);
+    localStorage.setItem('bolao_2026_participants', JSON.stringify(list));
     recalculateAllScores(list, allMatches);
   };
 
@@ -212,17 +204,23 @@ export default function App() {
       }
     }
 
-    // Update current user item name in participants list
-    let updatedParts = [...participants];
-    const userIdx = updatedParts.findIndex((p) => p.isCurrentUser);
-    
-    if (userIdx >= 0) {
-      updatedParts[userIdx].name = name;
-      updatedParts[userIdx].bets = loadedBets;
+    // Set all participants isCurrentUser to false, and either update the matched user or add them
+    let updatedParts = participants.map(p => ({ ...p, isCurrentUser: false }));
+    const existingIdx = updatedParts.findIndex(
+      (p) => p.name.toLowerCase().trim() === name.toLowerCase().trim()
+    );
+
+    if (existingIdx >= 0) {
+      updatedParts[existingIdx].isCurrentUser = true;
+      updatedParts[existingIdx].bets = loadedBets;
     } else {
-      // Re-initialize completely
-      initParticipants(name, matches, loadedBets);
-      return;
+      updatedParts.push({
+        id: `user_${Date.now()}`,
+        name: name,
+        isCurrentUser: true,
+        bets: loadedBets,
+        score: 0,
+      });
     }
 
     setParticipants(updatedParts);
@@ -405,23 +403,20 @@ export default function App() {
   const handleLogout = () => {
     localStorage.removeItem('bolao_2026_user_name');
     localStorage.removeItem('bolao_2026_user_bets');
-    localStorage.removeItem('bolao_2026_matches');
-    localStorage.removeItem('bolao_2026_participants');
     
     setCurrentUser(null);
     setCurrentUserBets({});
     
-    // Regenerate fresh database
-    const freshM = [...generateGroupMatches(), ...generateKnockoutMatches()];
-    setMatches(freshM);
-    
+    // Reset isCurrentUser flag for all registrants
+    const updatedParts = participants.map((p) => ({ ...p, isCurrentUser: false }));
+    setParticipants(updatedParts);
+    localStorage.setItem('bolao_2026_participants', JSON.stringify(updatedParts));
+
     // Reset tabs
     setActiveTab('jogos');
     setActivePhase('group');
     setActiveGroupTab('A');
 
-    // Trigger full fresh mock participants structure
-    initParticipants('Novo Campo', freshM, {});
     triggerToast('🚪 Perfil desconectado. Comece novamente!');
   };
 
@@ -646,6 +641,7 @@ export default function App() {
                       setActivePhase={setActivePhase}
                       activeGroupTab={activeGroupTab}
                       setActiveGroupTab={setActiveGroupTab}
+                      currentUser={currentUser}
                     />
                   </motion.div>
                 )}
