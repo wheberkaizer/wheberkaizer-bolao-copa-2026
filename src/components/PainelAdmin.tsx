@@ -32,7 +32,7 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
   const [editedScores, setEditedScores] = useState<{ [matchId: string]: { scoreA: string; scoreB: string } }>({});
 
   // New match form state
-  const [phase, setPhase] = useState<'round16_avos' | 'round16' | 'quarter' | 'semi' | 'final'>('round16');
+  const [phase, setPhase] = useState<'group' | 'round16_avos' | 'round16' | 'quarter' | 'semi' | 'final'>('group');
   const [teamAName, setTeamAName] = useState('');
   const [teamACode, setTeamACode] = useState('');
   const [teamBName, setTeamBName] = useState('');
@@ -42,6 +42,9 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
   const [stadium, setStadium] = useState('MetLife Stadium');
   const [city, setCity] = useState('Nova York, EUA');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Phase filter state for managing scores
+  const [filterPhase, setFilterPhase] = useState<string>('group');
 
   // Sync state with matches whenever matches or isOpen change
   useEffect(() => {
@@ -100,6 +103,7 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
     const newMatch: Match = {
       id: `K-CUSTOM-${Date.now()}`,
       phase,
+      group: phase === 'group' ? 'A' : undefined,
       teamA: {
         id: teamAName.trim().toLowerCase().replace(/\s+/g, '-'),
         name: teamAName.trim(),
@@ -140,6 +144,11 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
   };
 
   if (!isOpen) return null;
+
+  const filteredMatchesForList = matches.filter((m) => {
+    if (filterPhase === 'all') return true;
+    return m.phase === filterPhase;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
@@ -197,13 +206,14 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
 
               <div>
                 <label className="block text-[10px] font-bold text-gray-350 uppercase tracking-wider mb-1">
-                  Fase do Mata-Mata
+                  Fase do Jogo / Mata-Mata
                 </label>
                 <select
                   value={phase}
                   onChange={(e) => setPhase(e.target.value as any)}
                   className="w-full rounded-lg bg-black/40 border border-white/10 text-white font-bold text-[11px] p-2 focus:border-cup-gold outline-none cursor-pointer"
                 >
+                  <option value="group">Fase de Grupos</option>
                   <option value="round16_avos">16-avos de Final</option>
                   <option value="round16">Oitavas de Final</option>
                   <option value="quarter">Quartas de Final</option>
@@ -340,12 +350,28 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
 
           {/* Right Column: Edit Scores and List of all current matches */}
           <div className="flex-grow flex flex-col space-y-3 min-w-0">
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white/5 p-3 rounded-2xl border border-white/5 shrink-0">
-              <div className="flex items-center gap-2 text-[11px] text-cup-lightgold">
-                <AlertCircle size={14} className="shrink-0 text-cup-gold" />
-                <span>Coloque placar oficial em ambos os campos para calcular as pontuações do bolão.</span>
+            {/* Filter Phase Selector & Global Actions Row */}
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-black/40 p-4 rounded-2xl border border-white/10 shrink-0">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <label className="text-xs font-black uppercase text-cup-lightgold tracking-wider flex items-center gap-1.5 shrink-0">
+                  <span>Visualizar Fase:</span>
+                </label>
+                <select
+                  value={filterPhase}
+                  onChange={(e) => setFilterPhase(e.target.value)}
+                  className="rounded-xl bg-[#092c16] border border-cup-gold/30 text-white font-bold text-xs px-3.5 py-1.5 focus:border-cup-gold outline-none cursor-pointer min-w-[155px] transition-all"
+                >
+                  <option value="group">Fase de Grupos ⚽</option>
+                  <option value="round16_avos">16-avos de Final 🏆</option>
+                  <option value="round16">Oitavas de Final 🏆</option>
+                  <option value="quarter">Quartas de Final 🏆</option>
+                  <option value="semi">Semifinais 🏆</option>
+                  <option value="final">A Grande Final ⭐</option>
+                  <option value="all">Ver Todas as Fases 🌐</option>
+                </select>
               </div>
-              <div className="flex gap-2 shrink-0">
+
+              <div className="flex gap-2 justify-end shrink-0">
                 <button
                   type="button"
                   onClick={handleClearAll}
@@ -371,8 +397,21 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
               </div>
             </div>
 
+            {/* Warning badge */}
+            <div className="flex items-center gap-2 text-[10px] text-cup-lightgold/80 bg-white/5 p-2 rounded-xl border border-white/5 shrink-0">
+              <AlertCircle size={13} className="shrink-0 text-cup-gold" />
+              <span>Digite o placar de ambos os campos para atualizar as pontuações oficiais e clique em "Salvar Resultados Oficiais" abaixo.</span>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 overflow-y-auto pr-1 flex-1">
-              {matches.map((m) => {
+              {filteredMatchesForList.length === 0 ? (
+                <div className="col-span-full py-12 flex flex-col items-center justify-center text-center text-gray-450 bg-black/15 rounded-2xl border border-dashed border-white/10">
+                  <span className="text-3xl mb-2">⚽</span>
+                  <p className="text-xs font-bold uppercase tracking-wider text-cup-lightgold/80">Nenhum confronto nesta fase</p>
+                  <p className="text-[10px] mt-1 text-gray-400">Use o editor à esquerda para iniciar e liberar novos jogos.</p>
+                </div>
+              ) : (
+                filteredMatchesForList.map((m) => {
                 const row = editedScores[m.id] || { scoreA: '', scoreB: '' };
                 const isFilled = row.scoreA !== '' && row.scoreB !== '';
                 const isCustomKnockout = m.id.toString().startsWith('K-CUSTOM-');
@@ -449,7 +488,7 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
                     )}
                   </div>
                 );
-              })}
+              }))}
             </div>
           </div>
         </div>

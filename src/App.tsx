@@ -445,15 +445,16 @@ export default function App() {
 
     if (upsertRows.length > 0) {
       try {
-        const { error: upsertError } = await supabase
+        const { error: upsertError, status } = await supabase
           .from('palpites')
           .upsert(upsertRows, { onConflict: 'nickname,match_id' });
 
-        if (upsertError) {
-          console.error("Erro ao enviar palpites para o Supabase:", upsertError.message);
-          syncErrorMsg = upsertError.message;
-        } else {
+        const isSuccessStatus = status && status >= 200 && status < 300;
+        if (isSuccessStatus || !upsertError) {
           syncSuccess = true;
+        } else {
+          console.error("Erro ao enviar palpites para o Supabase (Status:", status, "):", upsertError?.message);
+          syncErrorMsg = upsertError?.message || `Erro com código de status: ${status}`;
         }
       } catch (err: any) {
         console.error("Erro de rede ao salvar palpites:", err);
