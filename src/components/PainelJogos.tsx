@@ -50,83 +50,6 @@ export function PainelJogos({
   const groupsList = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
   const groupScrollRef = useRef<HTMLDivElement>(null);
 
-  const handleShareWhatsApp = () => {
-    if (!currentUser) return;
-    
-    // Get all bets
-    const betMatches = matches.map(m => {
-      const b = userBets[m.id];
-      return { match: m, bet: b };
-    }).filter(item => item.bet && item.bet.scoreA !== null && item.bet.scoreB !== null);
-
-    if (betMatches.length === 0) {
-      alert("Você ainda não salvou nenhum palpite para compartilhar! Preencha os placares e clique em 'Salvar Palpites' primeiro.");
-      return;
-    }
-
-    let message = `🏆 *MEUS PALPITES - BOLÃO COPA 2026* ⚽\n\n`;
-    message += `👤 *Participante:* ${currentUser}\n`;
-    message += `📊 *Palpites Ativos:* ${betMatches.length} jogo(s)\n\n`;
-
-    const groupItems = betMatches.filter(item => item.match.phase === 'group');
-    const knockoutItems = betMatches.filter(item => item.match.phase !== 'group');
-
-    if (groupItems.length > 0) {
-      message += `🟩 *FASE DE GRUPOS*\n`;
-      const groupedByLetter: { [letter: string]: typeof groupItems } = {};
-      groupItems.forEach(item => {
-        const letter = item.match.group || 'A';
-        if (!groupedByLetter[letter]) groupedByLetter[letter] = [];
-        groupedByLetter[letter].push(item);
-      });
-
-      Object.keys(groupedByLetter).sort().forEach(letter => {
-        message += `*Grupo ${letter}:*\n`;
-        groupedByLetter[letter].forEach(item => {
-          message += `• ${item.match.teamA.flag || '⚽'} ${item.match.teamA.name} *${item.bet.scoreA} x ${item.bet.scoreB}* ${item.match.teamB.name} ${item.match.teamB.flag || '⚽'}\n`;
-        });
-        message += `\n`;
-      });
-    }
-
-    const getPhaseLabelShare = (phase: string) => {
-      switch (phase) {
-        case 'round16_avos': return '16 avos de Final';
-        case 'round16': return 'Oitavas de Final';
-        case 'quarter': return 'Quartas de Final';
-        case 'semi': return 'Semifinais';
-        case 'final': return 'A Grande Final';
-        default: return phase.toUpperCase();
-      }
-    };
-
-    if (knockoutItems.length > 0) {
-      message += `🟨 *FASE MATA-MATA*\n`;
-      const groupedByPhase: { [phase: string]: typeof knockoutItems } = {};
-      knockoutItems.forEach(item => {
-        const phase = item.match.phase;
-        if (!groupedByPhase[phase]) groupedByPhase[phase] = [];
-        groupedByPhase[phase].push(item);
-      });
-
-      const phasesSeq = ['round16_avos', 'round16', 'quarter', 'semi', 'final'];
-      phasesSeq.forEach(phase => {
-        if (groupedByPhase[phase] && groupedByPhase[phase].length > 0) {
-          message += `*${getPhaseLabelShare(phase)}:*\n`;
-          groupedByPhase[phase].forEach(item => {
-            message += `• ${item.match.teamA.flag || '⚽'} ${item.match.teamA.name} *${item.bet.scoreA} x ${item.bet.scoreB}* ${item.match.teamB.name} ${item.match.teamB.flag || '⚽'}\n`;
-          });
-          message += `\n`;
-        }
-      });
-    }
-
-    message += `📲 _Palpites enviados via Bolão Copa do Mundo 2026!_`;
-
-    const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
-    window.open(whatsappUrl, '_blank');
-  };
-
   // Filter matches based on selected phase and group
   const filteredMatches = matches.filter((match) => {
     if (activePhase === 'group') {
@@ -267,16 +190,6 @@ export function PainelJogos({
               <span>Salvar Palpites</span>
             </motion.button>
           )}
-
-          <motion.button
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            onClick={handleShareWhatsApp}
-            className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-black text-xs uppercase tracking-widest rounded-xl shadow-lg shadow-emerald-750/30 border border-emerald-500/20 flex items-center justify-center gap-2 cursor-pointer transition-all"
-          >
-            <span className="text-sm">💬</span>
-            <span>Compartilhar via WhatsApp ⚽</span>
-          </motion.button>
         </div>
       </div>
 

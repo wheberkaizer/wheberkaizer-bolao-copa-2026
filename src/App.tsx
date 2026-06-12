@@ -6,6 +6,7 @@ import {
   generateKnockoutMatches,
   calculateBetScore,
 } from './data/worldCupData';
+import { supabase } from './supabaseClient';
 
 // Subcomponents
 import { CampoFutebol } from './components/CampoFutebol';
@@ -55,7 +56,102 @@ export default function App() {
     message: '',
   });
 
-  // Initialize App Databases & restore from LocalStorage
+  // Fetch & sync all participants and official guesses in real-time with Supabase
+  const syncWithSupabase = async (providedMatches?: Match[], customUserName?: string) => {
+    try {
+      const activeMatches = providedMatches || matches;
+      const activeUser = customUserName !== undefined ? customUserName : currentUser;
+
+      // Fetch all entries from the remote Supabase 'palpites' table
+      const { data, error } = await supabase
+        .from('palpites')
+        .select('*');
+
+      if (error) {
+        console.warn("Aviso ao ler do Supabase, utilizando backups do LocalStorage:", error.message);
+        return;
+      }
+
+      if (data && Array.isArray(data)) {
+        // Organize flat list of guesses by player nickname
+        const betsMapByNickname: { [nickname: string]: { [matchId: string]: Bet } } = {};
+        
+        data.forEach((row: any) => {
+          const nick = row.nickname;
+          const matchId = row.match_id;
+          const scoreA = row.score_a;
+          const scoreB = row.score_b;
+          
+          if (!nick) return;
+          if (!betsMapByNickname[nick]) {
+            betsMapByNickname[nick] = {};
+          }
+          
+          betsMapByNickname[nick][matchId] = {
+            matchId: matchId.toString(),
+            scoreA: scoreA !== null && scoreA !== undefined ? Number(scoreA) : null,
+            scoreB: scoreB !== null && scoreB !== undefined ? Number(scoreB) : null,
+          };
+        });
+
+        // Map grouped results into a Participant structure
+        let list: Participant[] = Object.keys(betsMapByNickname).map((nick) => {
+          const isCurrentUser = activeUser ? nick.toLowerCase().trim() === activeUser.toLowerCase().trim() : false;
+          return {
+            id: `user_db_${nick}`,
+            name: nick,
+            isCurrentUser,
+            bets: betsMapByNickname[nick],
+            score: 0, // Will be computed dynamically below
+          };
+        });
+
+        // Ensure current active user has a placeholder slot in the leader panel if they are freshly registered
+        if (activeUser) {
+          const exists = list.some(p => p.name.toLowerCase().trim() === activeUser.toLowerCase().trim());
+          if (!exists) {
+            const backupBetsKey = `bolao_2026_user_bets_${activeUser}`;
+            const localUserBetsString = localStorage.getItem(backupBetsKey) || localStorage.getItem('bolao_2026_user_bets');
+            let baseUserBets: { [mId: string]: Bet } = {};
+            if (localUserBetsString) {
+              try {
+                baseUserBets = JSON.parse(localUserBetsString);
+              } catch (err) {}
+            }
+            list.push({
+              id: `user_${Date.now()}`,
+              name: activeUser,
+              isCurrentUser: true,
+              bets: baseUserBets,
+              score: 0,
+            });
+          } else {
+            // Guarantee isCurrentUser flag and state matching
+            list = list.map(p => {
+              if (p.name.toLowerCase().trim() === activeUser.toLowerCase().trim()) {
+                return { ...p, isCurrentUser: true };
+              }
+              return { ...p, isCurrentUser: false };
+            });
+          }
+
+          // Merge loaded DB bets of current user with local components
+          const selfPart = list.find(p => p.isCurrentUser);
+          if (selfPart) {
+            setCurrentUserBets(selfPart.bets);
+          }
+        }
+
+        setParticipants(list);
+        localStorage.setItem('bolao_2026_participants', JSON.stringify(list));
+        recalculateAllScores(list, activeMatches);
+      }
+    } catch (err) {
+      console.error("Erro na sincronização de dados do Supabase:", err);
+    }
+  };
+
+  // Initialize App Databases & restore from LocalStorage with real-time cloud background fetch
   useEffect(() => {
     // 1. Restore User Profile
     const savedUser = localStorage.getItem('bolao_2026_user_name');
@@ -136,6 +232,9 @@ export default function App() {
     setParticipants(loadedParticipants);
     localStorage.setItem('bolao_2026_participants', JSON.stringify(loadedParticipants));
     recalculateAllScores(loadedParticipants, loadedMatches);
+
+    // 5. Fire off live Supabase synchronized load
+    syncWithSupabase(loadedMatches, savedUser || undefined);
   }, []);
 
   // Initialization helper to create participants list starting with only actual logged-in users (starts fully empty if no user)
@@ -188,45 +287,61 @@ export default function App() {
   };
 
   // Login handler
-  const handleUserLogin = (name: string) => {
+  const handleUserLogin = async (name: string) => {
     setCurrentUser(name);
     localStorage.setItem('bolao_2026_user_name', name);
 
-    // Retrieve specific user bets if they exist in localStorage
-    const savedSpecificBets = localStorage.getItem(`bolao_2026_user_bets_${name}`);
     let loadedBets = currentUserBets;
-    if (savedSpecificBets) {
-      try {
-        loadedBets = JSON.parse(savedSpecificBets);
-        setCurrentUserBets(loadedBets);
-      } catch (e) {
-        console.error("Erro ao carregar palpites anteriores", e);
+
+    try {
+      // First, attempt to retrieve this specific user's guesses from Supabase
+      const { data, error } = await supabase
+        .from('palpites')
+        .select('*')
+        .eq('nickname', name);
+
+      if (!error && data && data.length > 0) {
+        const dbBets: { [mId: string]: Bet } = {};
+        data.forEach((row: any) => {
+          dbBets[row.match_id] = {
+            matchId: row.match_id.toString(),
+            scoreA: row.score_a !== null ? Number(row.score_a) : null,
+            scoreB: row.score_b !== null ? Number(row.score_b) : null,
+          };
+        });
+        loadedBets = dbBets;
+        setCurrentUserBets(dbBets);
+        const serialized = JSON.stringify(dbBets);
+        localStorage.setItem(`bolao_2026_user_bets_${name}`, serialized);
+        localStorage.setItem('bolao_2026_user_bets', serialized);
+      } else {
+        // Fallback to local storage if no database record exists
+        const savedSpecificBets = localStorage.getItem(`bolao_2026_user_bets_${name}`);
+        if (savedSpecificBets) {
+          try {
+            loadedBets = JSON.parse(savedSpecificBets);
+            setCurrentUserBets(loadedBets);
+          } catch (e) {
+            console.error("Erro ao carregar palpites anteriores", e);
+          }
+        }
       }
+
+      // Refresh the wider list of players from Supabase
+      await syncWithSupabase(matches, name);
+      triggerToast(`⚽ Bem-vindo de volta, ${name}! Seus dados foram sincronizados em tempo real.`);
+    } catch (err) {
+      console.warn("Erro ao buscar dados de login no Supabase, operando localmente:", err);
+      // Fallback
+      const savedSpecificBets = localStorage.getItem(`bolao_2026_user_bets_${name}`);
+      if (savedSpecificBets) {
+        try {
+          loadedBets = JSON.parse(savedSpecificBets);
+          setCurrentUserBets(loadedBets);
+        } catch (e) {}
+      }
+      triggerToast(`⚽ Bem-vindo ao campo, ${name}! (Modo Offline)`);
     }
-
-    // Set all participants isCurrentUser to false, and either update the matched user or add them
-    let updatedParts = participants.map(p => ({ ...p, isCurrentUser: false }));
-    const existingIdx = updatedParts.findIndex(
-      (p) => p.name.toLowerCase().trim() === name.toLowerCase().trim()
-    );
-
-    if (existingIdx >= 0) {
-      updatedParts[existingIdx].isCurrentUser = true;
-      updatedParts[existingIdx].bets = loadedBets;
-    } else {
-      updatedParts.push({
-        id: `user_${Date.now()}`,
-        name: name,
-        isCurrentUser: true,
-        bets: loadedBets,
-        score: 0,
-      });
-    }
-
-    setParticipants(updatedParts);
-    localStorage.setItem('bolao_2026_participants', JSON.stringify(updatedParts));
-    recalculateAllScores(updatedParts, matches);
-    triggerToast(`⚽ Bem-vindo ao campo, ${name}!`);
   };
 
   // User predicts score of a game
@@ -265,7 +380,7 @@ export default function App() {
   };
 
   // Explicit confirmation click for "Salvar Palpites"
-  const handleSaveAllBets = () => {
+  const handleSaveAllBets = async () => {
     if (!currentUser) return;
 
     const betsArray = Object.values(currentUserBets) as Bet[];
@@ -309,37 +424,72 @@ export default function App() {
       }
     });
 
-    // Save strictly to local storage
+    // Save strictly to local storage as fallback
     const serializedBets = JSON.stringify(cleanedBets);
     localStorage.setItem('bolao_2026_user_bets', serializedBets);
     localStorage.setItem(`bolao_2026_user_bets_${currentUser}`, serializedBets);
 
-    const updatedParts = participants.map((p) => {
-      if (p.isCurrentUser) {
-        return {
-          ...p,
-          bets: cleanedBets,
-        };
+    // Prepare rows for Supabase bulk upsert
+    const upsertRows = Object.keys(cleanedBets).map((matchId) => {
+      const b = cleanedBets[matchId];
+      return {
+        nickname: currentUser,
+        match_id: matchId.toString(),
+        score_a: b.scoreA,
+        score_b: b.scoreB,
+      };
+    });
+
+    let syncSuccess = false;
+    let syncErrorMsg = '';
+
+    if (upsertRows.length > 0) {
+      try {
+        const { error: upsertError } = await supabase
+          .from('palpites')
+          .upsert(upsertRows, { onConflict: 'nickname,match_id' });
+
+        if (upsertError) {
+          console.error("Erro ao enviar palpites para o Supabase:", upsertError.message);
+          syncErrorMsg = upsertError.message;
+        } else {
+          syncSuccess = true;
+        }
+      } catch (err: any) {
+        console.error("Erro de rede ao salvar palpites:", err);
+        syncErrorMsg = err?.message || 'Falha de rede';
       }
-      return p;
-    });
+    } else {
+      // No active complete bets to upsert
+      syncSuccess = true;
+    }
 
-    setParticipants(updatedParts);
-    localStorage.setItem('bolao_2026_participants', JSON.stringify(updatedParts));
-    recalculateAllScores(updatedParts, matches);
+    // Refresh state from central source to sync rankings
+    await syncWithSupabase(matches, currentUser);
 
-    // Save and open elegant result confirmation modal
-    setSaveModal({
-      show: true,
-      status: 'success',
-      title: 'Palpites Salvos com Sucesso!',
-      message: `Palpites salvos com sucesso para o participante ${currentUser}!`,
-      participantName: currentUser,
-      completedCount: Object.keys(cleanedBets).length,
-      incompleteCount: 0,
-    });
-
-    triggerToast(`💾 Palpites de ${currentUser} foram gravados com sucesso!`);
+    if (syncSuccess) {
+      setSaveModal({
+        show: true,
+        status: 'success',
+        title: 'Palpites Salvos com Sucesso!',
+        message: `Todos os seus palpites de placar foram salvos com sucesso e sincronizados em tempo real com o banco de dados nuvem do Supabase!`,
+        participantName: currentUser,
+        completedCount: Object.keys(cleanedBets).length,
+        incompleteCount: 0,
+      });
+      triggerToast(`💾 Palpites de ${currentUser} sincronizados com o Supabase!`);
+    } else {
+      setSaveModal({
+        show: true,
+        status: 'warning',
+        title: 'Salvo Localmente (Nuvem offline)',
+        message: `Os palpites de ${currentUser} foram guardados localmente no seu navegador, mas não pudemos sincronizar em tempo real com o banco de dados nuvem do Supabase. Motivo: ${syncErrorMsg}`,
+        participantName: currentUser,
+        completedCount: Object.keys(cleanedBets).length,
+        incompleteCount: 0,
+      });
+      triggerToast(`⚠️ Palpites persistidos de forma local apenas.`);
+    }
   };
 
   // Admin saves official outcome
@@ -612,6 +762,17 @@ export default function App() {
                       </span>
                     </div>
                   </div>
+
+                  <button
+                    onClick={async () => {
+                      await syncWithSupabase(matches, currentUser || undefined);
+                      triggerToast('🔄 Dados atualizados da nuvem Supabase!');
+                    }}
+                    className="p-2 bg-black/20 hover:bg-emerald-500/15 text-white/70 hover:text-emerald-400 border border-white/5 hover:border-emerald-500/20 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 text-[11px] font-bold uppercase tracking-wider"
+                    title="Sincronizar dados em tempo real"
+                  >
+                    <span>🔄 Atualizar</span>
+                  </button>
 
                   <button
                     onClick={handleLogout}
