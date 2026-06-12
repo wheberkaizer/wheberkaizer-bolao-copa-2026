@@ -1,0 +1,6 @@
+{
+  "name": "Bolão Copa do Mundo 2026",
+  "description": "Aplicativo recreativo de bolão de palpites para a Copa do Mundo da FIFA 2026 com painel de jogos, grupos de A a L e classificação dinâmica.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
