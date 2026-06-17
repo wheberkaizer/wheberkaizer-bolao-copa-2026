@@ -59,8 +59,38 @@ export default function App() {
   // Fetch & sync all participants and official guesses in real-time with Supabase
   const syncWithSupabase = async (providedMatches?: Match[], customUserName?: string) => {
     try {
-      const activeMatches = providedMatches || matches;
+      let activeMatches = providedMatches || matches;
       const activeUser = customUserName !== undefined ? customUserName : currentUser;
+
+      // 1. Tenta carregar também os resultados oficiais centrais do Supabase (se a tabela opcional 'resultados_oficiais' existir)
+      try {
+        const { data: dbResults, error: dbResultsError } = await supabase
+          .from('resultados_oficiais')
+          .select('*');
+
+        if (!dbResultsError && dbResults && dbResults.length > 0) {
+          const resultsMap: { [mId: string]: { scoreA: number; scoreB: number } } = {};
+          dbResults.forEach((r: any) => {
+            if (r.score_a !== null && r.score_b !== null) {
+              resultsMap[r.match_id.toString()] = { scoreA: Number(r.score_a), scoreB: Number(r.score_b) };
+            }
+          });
+
+          const updatedWithDb = activeMatches.map(m => {
+            const official = resultsMap[m.id.toString()];
+            if (official) {
+              return { ...m, scoreA: official.scoreA, scoreB: official.scoreB };
+            }
+            return m;
+          });
+
+          activeMatches = updatedWithDb;
+          setMatches(updatedWithDb);
+          localStorage.setItem('bolao_2026_matches', JSON.stringify(updatedWithDb));
+        }
+      } catch (errDB) {
+        console.log("Tabela 'resultados_oficiais' opcional não configurada ou inacessível no Supabase:", errDB);
+      }
 
       // Fetch all entries from the remote Supabase 'palpites' table
       const { data, error } = await supabase
@@ -494,7 +524,7 @@ export default function App() {
   };
 
   // Admin saves official outcome
-  const handleSaveOfficialScores = (updatedScores: { [matchId: string]: { scoreA: number | null; scoreB: number | null } }) => {
+  const handleSaveOfficialScores = async (updatedScores: { [matchId: string]: { scoreA: number | null; scoreB: number | null } }) => {
     const updatedMatches = matches.map((m) => {
       const edited = updatedScores[m.id];
       if (edited) {
@@ -512,6 +542,32 @@ export default function App() {
 
     // Force score recalculations for everyone
     recalculateAllScores(participants, updatedMatches);
+
+    // Tentativa de persistência na tabela Supabase 'resultados_oficiais'
+    try {
+      const rows = Object.entries(updatedScores)
+        .filter(([_, score]) => score.scoreA !== null && score.scoreB !== null)
+        .map(([id, score]) => ({
+          match_id: id,
+          score_a: score.scoreA,
+          score_b: score.scoreB,
+        }));
+
+      if (rows.length > 0) {
+        const { error } = await supabase
+          .from('resultados_oficiais')
+          .upsert(rows, { onConflict: 'match_id' });
+        
+        if (error) {
+          console.warn("Aviso: Falha ao persistir na tabela 'resultados_oficiais' do Supabase.", error.message);
+        } else {
+          console.log("Sucesso: Resultados oficiais salvos de forma centralizada no Supabase!");
+        }
+      }
+    } catch (dbErr) {
+      console.warn("Backup Offline: Tabela 'resultados_oficiais' inacessível ou não configurada.", dbErr);
+    }
+
     triggerToast('🏆 Resultados oficiais salvos! O ranking geral foi atualizado em tempo real.');
   };
 

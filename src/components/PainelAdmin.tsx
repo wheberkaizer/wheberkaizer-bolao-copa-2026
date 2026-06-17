@@ -31,6 +31,143 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
   // Temporary state for the editor
   const [editedScores, setEditedScores] = useState<{ [matchId: string]: { scoreA: string; scoreB: string } }>({});
 
+  // Sync API States
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatusMessage, setSyncStatusMessage] = useState('');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [showConfigHelp, setShowConfigHelp] = useState(false);
+
+  const MOCK_API_MATCHES = [
+    { home: 'MEX', away: 'RSA', homeScore: 2, awayScore: 1 },
+    { home: 'KOR', away: 'CZE', homeScore: 1, awayScore: 1 },
+    { home: 'CZE', away: 'RSA', homeScore: 0, awayScore: 2 },
+    { home: 'MEX', away: 'KOR', homeScore: 2, awayScore: 0 },
+    { home: 'CZE', away: 'MEX', homeScore: 0, awayScore: 3 },
+    { home: 'RSA', away: 'KOR', homeScore: 1, awayScore: 2 },
+    { home: 'CAN', away: 'BIH', homeScore: 3, awayScore: 1 },
+    { home: 'QAT', away: 'SUI', homeScore: 0, awayScore: 2 },
+    { home: 'BRA', away: 'MAR', homeScore: 4, awayScore: 1 },
+    { home: 'USA', away: 'PAR', homeScore: 2, awayScore: 1 },
+  ];
+
+  const syncResultsFromAPI = async (isSimulation = false) => {
+    setIsSyncing(true);
+    setSyncError(null);
+    setSyncStatusMessage('');
+
+    try {
+      let apiMatches: Array<{ homeCode: string; awayCode: string; homeScore: number; awayScore: number }> = [];
+
+      if (isSimulation) {
+        MOCK_API_MATCHES.forEach(mock => {
+          apiMatches.push({
+            homeCode: mock.home,
+            awayCode: mock.away,
+            homeScore: mock.homeScore,
+            awayScore: mock.awayScore
+          });
+        });
+        await new Promise(resolve => setTimeout(resolve, 1200)); // Delay para simular rede
+      } else {
+        const rapidApiKey = (import.meta as any).env?.VITE_RAPIDAPI_KEY;
+        const footballDataKey = (import.meta as any).env?.VITE_FOOTBALL_DATA_API_KEY;
+
+        if (footballDataKey) {
+          // Fetch via football-data.org (Direct API)
+          const resp = await fetch('https://api.football-data.org/v4/competitions/WC/matches?season=2026', {
+            headers: {
+              'X-Auth-Token': footballDataKey
+            }
+          });
+          if (!resp.ok) {
+            throw new Error(`Erro na API football-data.org: Código ${resp.status}`);
+          }
+          const data = await resp.json();
+          if (data && data.matches) {
+            data.matches.forEach((m: any) => {
+              if (m.status === 'FINISHED' && m.score?.fullTime?.home !== null && m.score?.fullTime?.away !== null) {
+                apiMatches.push({
+                  homeCode: m.homeTeam?.tla || '',
+                  awayCode: m.awayTeam?.tla || '',
+                  homeScore: Number(m.score.fullTime.home),
+                  awayScore: Number(m.score.fullTime.away)
+                });
+              }
+            });
+          }
+        } else if (rapidApiKey) {
+          // Fetch via API-Football (RapidAPI)
+          const resp = await fetch('https://api-football-v1.p.rapidapi.com/v3/fixtures?league=1&season=2026', {
+            headers: {
+              'x-rapidapi-key': rapidApiKey,
+              'x-rapidapi-host': 'api-football-v1.p.rapidapi.com'
+            }
+          });
+          if (!resp.ok) {
+            throw new Error(`Erro na API-Football (RapidAPI): Código ${resp.status}`);
+          }
+          const data = await resp.json();
+          if (data && data.response) {
+            data.response.forEach((item: any) => {
+              const status = item.fixture?.status?.short;
+              const hasGoals = item.goals?.home !== null && item.goals?.away !== null;
+              if ((status === 'FT' || status === 'FINISHED' || status === 'AET' || status === 'PEN') && hasGoals) {
+                apiMatches.push({
+                  homeCode: item.teams?.home?.code || '',
+                  awayCode: item.teams?.away?.code || '',
+                  homeScore: Number(item.goals.home),
+                  awayScore: Number(item.goals.away)
+                });
+              }
+            });
+          }
+        } else {
+          throw new Error('Nenhuma chave de API configurada em .env ou ambiente para puxar dados reais!');
+        }
+      }
+
+      if (apiMatches.length === 0) {
+        setSyncStatusMessage('Nenhum jogo finalizado encontrado na API para a Copa de 2026 até o momento.');
+        setIsSyncing(false);
+        return;
+      }
+
+      // Cruzamento de dados com nossa lista de matches local
+      let updatedCount = 0;
+      const scoresToUpdate = { ...editedScores };
+
+      apiMatches.forEach(apiM => {
+        const homeCode = apiM.homeCode.toUpperCase();
+        const awayCode = apiM.awayCode.toUpperCase();
+
+        const matchToUpdate = matches.find(m => {
+          const mCodeA = m.teamA.code?.toUpperCase();
+          const mCodeB = m.teamB.code?.toUpperCase();
+          return (mCodeA === homeCode && mCodeB === awayCode) || (mCodeA === awayCode && mCodeB === homeCode);
+        });
+
+        if (matchToUpdate) {
+          const isReversed = matchToUpdate.teamA.code?.toUpperCase() === awayCode;
+          const scoreAStr = isReversed ? apiM.awayScore.toString() : apiM.homeScore.toString();
+          const scoreBStr = isReversed ? apiM.homeScore.toString() : apiM.awayScore.toString();
+
+          scoresToUpdate[matchToUpdate.id] = {
+            scoreA: scoreAStr,
+            scoreB: scoreBStr
+          };
+          updatedCount++;
+        }
+      });
+
+      setEditedScores(scoresToUpdate);
+      setSyncStatusMessage(`Sucesso! ${updatedCount} resultados da Copa do Mundo foram sincronizados e preenchidos no formulário. Clique em "Salvar Resultados Oficiais" no final da tela para consolidar no banco de dados.`);
+    } catch (err: any) {
+      setSyncError(err.message || 'Ocorreu um erro inesperado ao sincronizar com a API.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   // New match form state
   const [phase, setPhase] = useState<'group' | 'round16_avos' | 'round16' | 'quarter' | 'semi' | 'final'>('group');
   const [teamAName, setTeamAName] = useState('');
@@ -401,6 +538,107 @@ export function PainelAdmin({ isOpen, onClose, matches, onSaveOfficialScores, on
             <div className="flex items-center gap-2 text-[10px] text-cup-lightgold/80 bg-white/5 p-2 rounded-xl border border-white/5 shrink-0">
               <AlertCircle size={13} className="shrink-0 text-cup-gold" />
               <span>Digite o placar de ambos os campos para atualizar as pontuações oficiais e clique em "Salvar Resultados Oficiais" abaixo.</span>
+            </div>
+
+            {/* API Integration Panel */}
+            <div className="bg-black/30 border border-cup-gold/25 rounded-2xl p-4 space-y-3 shrink-0">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-lg">🤖</span>
+                  <div>
+                    <h4 className="text-xs font-black uppercase text-cup-gold tracking-wider">
+                      Sincronização Automática (API Copa 2026)
+                    </h4>
+                    <p className="text-[10px] text-gray-300">
+                      Busca e preenche automaticamente os resultados das partidas concluídas.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => syncResultsFromAPI(false)}
+                    disabled={isSyncing}
+                    className="px-3 py-1.5 bg-gradient-to-r from-cup-gold to-cup-lightgold text-pitch-dark font-extrabold text-[10px] uppercase tracking-wider rounded-lg transition-all shadow hover:from-white hover:to-white flex items-center gap-1.5 disabled:opacity-55 cursor-pointer"
+                  >
+                    <RefreshCw size={11} className={`${isSyncing ? 'animate-spin' : ''}`} />
+                    {isSyncing ? 'Sincronizando...' : 'Sincronizar Resultados (API)'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => syncResultsFromAPI(true)}
+                    disabled={isSyncing}
+                    className="px-3 py-1.5 bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 font-bold text-[10px] uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 disabled:opacity-55 cursor-pointer"
+                  >
+                    Simular (Teste 🧪)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowConfigHelp(!showConfigHelp)}
+                    className="px-2.5 py-1.5 bg-white/5 border border-white/10 text-gray-400 hover:text-white rounded-lg transition-all text-[10px] font-bold cursor-pointer"
+                  >
+                    {showConfigHelp ? 'Fechar Ajuda 📖' : 'Como Configurar? 📖'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Status and feedback warnings */}
+              {syncStatusMessage && (
+                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-2.5 text-[10.5px] text-emerald-300 flex items-start gap-1.5 leading-snug">
+                  <span className="mt-0.5 shrink-0">✅</span>
+                  <span>{syncStatusMessage}</span>
+                </div>
+              )}
+
+              {syncError && (
+                <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-2.5 text-[10.5px] text-red-400 flex items-start gap-1.5 leading-snug">
+                  <span className="mt-0.5 shrink-0">⚠️</span>
+                  <div className="space-y-1">
+                    <p className="font-bold">Chave Não Configurada Localmente:</p>
+                    <p className="text-gray-300 text-[10px]">{syncError}</p>
+                    <p className="text-[9.5px] text-gray-400">
+                      Nenhuma chave foi encontrada nas variáveis de ambiente. Recomendamos a você usar o botão <span className="text-[#dba823] hover:underline cursor-pointer font-bold" onClick={() => syncResultsFromAPI(true)}>Simular (Teste 🧪)</span> para conferir a automação em ação agora mesmo!
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* API Setup Instructions block */}
+              <AnimatePresence>
+                {showConfigHelp && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="overflow-hidden bg-black/50 rounded-xl border border-white/5 p-3.5 space-y-2.5 text-[10px] text-gray-300 leading-relaxed"
+                  >
+                    <p className="font-black text-xs text-cup-gold uppercase tracking-wider">
+                      Guia para Configuração da API de Esportes
+                    </p>
+                    <div className="space-y-2">
+                      <div>
+                        <p className="font-bold text-white">🏆 Opção 1: Football-Data.org (Serviço Mais Prático e Recomendado):</p>
+                        <ol className="list-decimal pl-4.5 space-y-1 text-gray-300">
+                          <li>Acesse o site <a href="https://www.football-data.org/" target="_blank" rel="noopener noreferrer" className="text-cup-gold hover:underline font-bold">football-data.org</a> e clique para criar uma conta gratuita.</li>
+                          <li>Guarde o token enviado imediatamente ao seu email pessoal.</li>
+                          <li>Adicione essa chave no arquivo <code className="bg-white/10 px-1 py-0.5 rounded text-white font-mono text-[9.5px]">.env</code> local ou no Netlify com o nome de variável: <code className="bg-white/10 px-1 py-0.5 rounded text-white font-mono text-[9.5px]">VITE_FOOTBALL_DATA_API_KEY=sua_chave_aqui</code></li>
+                        </ol>
+                      </div>
+                      <div className="pt-1.5 border-t border-white/5">
+                        <p className="font-bold text-white">⚽ Opção 2: API-Football via RapidAPI:</p>
+                        <ol className="list-decimal pl-4.5 space-y-1 text-gray-300">
+                          <li>Crie uma conta gratuita em <a href="https://rapidapi.com/" target="_blank" rel="noopener noreferrer" className="text-cup-gold hover:underline font-bold">RapidAPI</a> e assine o plano free da <a href="https://rapidapi.com/api-sports/api/api-football" target="_blank" rel="noopener noreferrer" className="text-cup-gold hover:underline font-bold">API-Football</a>.</li>
+                          <li>Copie a chave de cabeçalho <code className="bg-white/10 px-1 py-0.5 rounded text-white font-mono text-[9.5px]">x-rapidapi-key</code> de qualquer playground de teste.</li>
+                          <li>Configure no seu ambiente com o nome de variável: <code className="bg-white/10 px-1 py-0.5 rounded text-white font-mono text-[9.5px]">VITE_RAPIDAPI_KEY=sua_chave_aqui</code></li>
+                        </ol>
+                      </div>
+                      <div className="pt-2 border-t border-white/5 text-[9.5px] text-gray-400">
+                        🔒 <strong className="text-white">Segurança & Netlify:</strong> No painel administrativo do Netlify, selecione seu projeto e vá em <code className="text-white font-mono text-[9px]">Site configuration &gt; Environment variables</code>. Salve como uma variável comum. O prefixo <code className="text-white font-mono text-[9.5px]">VITE_</code> é obrigatório para que o código de front-end do React+Vite consiga ler as chaves durante o empacotamento.
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 overflow-y-auto pr-1 flex-1">
