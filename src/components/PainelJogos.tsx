@@ -206,6 +206,14 @@ export function PainelJogos({
             
             // Checking if the actual simulated scores are active
             const matchPlayed = match.scoreA !== null && match.scoreB !== null;
+
+            // Trava de segurança para palpites de usuários comuns: se o jogo já aconteceu ou começou, bloqueia a edição de palpite
+            const matchDateTimeStr = `${match.date}T${match.time || '00:00'}:00`;
+            const matchDateTime = new Date(matchDateTimeStr);
+            const now = new Date();
+            const isMatchPast = matchDateTime.getTime() <= now.getTime();
+            const isBettingLocked = matchPlayed || isMatchPast;
+
             const pointsPayload = getPointsScored(match);
 
             return (
@@ -264,7 +272,7 @@ export function PainelJogos({
                       max={20}
                       value={bet.scoreA ?? ''}
                       onChange={(e) => handleInputChange(match.id, 'A', e.target.value)}
-                      disabled={matchPlayed}
+                      disabled={isBettingLocked}
                       className="w-10 h-10 md:w-11 md:h-11 bg-pitch-dark/40 text-white font-bold text-base md:text-lg text-center rounded-xl border border-emerald-800/40 focus:border-cup-gold outline-none transition-all placeholder-emerald-900 focus:bg-pitch-dark/70 disabled:opacity-50 disabled:cursor-not-allowed"
                       placeholder="?"
                     />
@@ -277,7 +285,7 @@ export function PainelJogos({
                       max={20}
                       value={bet.scoreB ?? ''}
                       onChange={(e) => handleInputChange(match.id, 'B', e.target.value)}
-                      disabled={matchPlayed}
+                      disabled={isBettingLocked}
                       className="w-10 h-10 md:w-11 md:h-11 bg-pitch-dark/40 text-white font-bold text-base md:text-lg text-center rounded-xl border border-emerald-800/40 focus:border-cup-gold outline-none transition-all placeholder-emerald-900 focus:bg-pitch-dark/70 disabled:opacity-50 disabled:cursor-not-allowed"
                       placeholder="?"
                     />
@@ -304,6 +312,10 @@ export function PainelJogos({
                     {bet.scoreA !== null && bet.scoreB !== null ? (
                       <span className="inline-flex items-center gap-1 text-[11px] text-cup-lightgold font-semibold bg-cup-gold/10 px-2 py-0.5 rounded-full border border-cup-gold/20">
                         <Check size={11} className="stroke-[3]" /> Palpite Salvo
+                      </span>
+                    ) : isMatchPast ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-red-400 bg-red-500/10 px-2.5 py-1 rounded-full border border-red-500/20 font-bold uppercase tracking-wider text-[9px]">
+                        🔒 Encerrado / Passado
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-[11px] text-cup-gold bg-cup-gold/10 px-2 py-0.5 rounded-full border border-cup-gold/15 animate-pulse">
